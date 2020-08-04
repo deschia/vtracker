@@ -8,5 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added codebase from Create React App
 - Added react router
+- Added makefile
+- Added dockerfile
+- Added docker-compose
+- Added nginx config file
+- Added module resolution config
+- Added extra params for tsconfig
+- Added tslint
 ### Changed
 - Moved styling to styles folder
