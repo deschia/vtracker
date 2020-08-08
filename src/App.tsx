@@ -2,15 +2,13 @@ import React from "react";
 import logo from "./logo.svg";
 import "./styles/App.scss";
 import { Route, Switch } from "react-router-dom";
+import Navigation from "~/components/navigation";
 
-interface Props {}
-
-interface State {}
-
-class App extends React.Component<Props, State> {
+class App extends React.Component {
   render = () => {
     return (
       <>
+        <Navigation />
         <Switch>
           <Route path={`/`}>
             <div className="App">

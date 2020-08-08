@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Material UI navigation
+
+## [0.1.0]
+### Added
 - Added codebase from Create React App
 - Added react router
 - Added makefile
