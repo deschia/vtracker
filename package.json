@@ -1,6 +1,6 @@
 {
   "name": "vtracker",
-  "version": "0.2.0-alpha.4",
+  "version": "0.2.0-alpha.5",
   "private": true,
   "dependencies": {
     "@babel/core": "7.2.2",
@@ -65,7 +65,8 @@
     "webpack-manifest-plugin": "2.0.4",
     "workbox-webpack-plugin": "3.6.3",
     "@material-ui/core": "4.11.0",
-    "@material-ui/icons": "4.9.1"
+    "@material-ui/icons": "4.9.1",
+    "@material-ui/lab": "4.0.0-alpha.56"
   },
   "devDependencies": {
     "prettier": "2.0.5",

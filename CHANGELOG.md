@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Material UI navigation
 - Tag filter component
 - Google firebase functions
+- Skeleton component
 
 ## [0.1.0]
 ### Added
