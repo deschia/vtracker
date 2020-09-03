@@ -2,6 +2,8 @@ import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import * as xml2js from "xml2js";
 import { default as axios } from "axios";
+import * as firebase from "firebase";
+import DocumentReference = firebase.firestore.DocumentReference;
 
 const API_KEY = "AIzaSyCHgxdEJZeAiydl18PhyK2l2GX7FxGazd8";
 const YOUTUBE_API_BASE_URL = "https://www.googleapis.com/youtube/v3";
@@ -12,7 +14,7 @@ const db = admin.firestore();
 
 exports.queryLiveStreamsByChannelId = functions.https.onRequest(
   async (req, res) => {
-    if (req.query["hub.mode"] === "subscription") {
+    if (req.query["hub.mode"] === "subscribe") {
       functions.logger.log("new subscription: ", req.query);
       res.send(req.query["hub.challenge"]);
       return;
@@ -27,15 +29,12 @@ exports.queryLiveStreamsByChannelId = functions.https.onRequest(
       // handle deleted-entry feed type
       const deleteEntry = parsedData.feed["at:deleted-entry"];
       if (deleteEntry) {
-        const link = deleteEntry.link[0];
-        functions.logger.log("deleted feed entry:", link);
+        functions.logger.log("deleted feed entry:", deleteEntry.link);
         res.sendStatus(200);
         return;
       }
 
       const videoId = parsedData.feed.entry[0]["yt:videoId"][0];
-      const channelId = parsedData.feed.entry[0]["yt:channelId"][0];
-      const channelName = parsedData.feed.entry[0].author[0].name[0];
 
       const url = `${YOUTUBE_API_BASE_URL}/videos`;
       const resp = await axios.get(url, {
@@ -53,11 +52,23 @@ exports.queryLiveStreamsByChannelId = functions.https.onRequest(
       const scheduledTime = new Date(liveData.scheduledStartTime);
       const liveViewerCount: string | undefined = liveData.concurrentViewers;
       const title: string = snippet.title;
-      const thumbnailUrl: string = snippet.thumbnails.maxres.url;
+      const channelId: string = snippet.channelId;
+      const channelName: string = snippet.channelTitle;
+      const description: string = snippet.description;
+      const thumbnailUrl: string = snippet.thumbnails.standard.url;
       const liveStatus: "live" | "none" | "upcoming" =
         snippet.liveBroadcastContent;
 
-      // TODO read description for member
+      // read description for member
+      const youtubeChannelIdRegex = /channel\/.{24}/g;
+      const regexResults = description.match(youtubeChannelIdRegex);
+      const members: FirebaseFirestore.DocumentReference[] = [];
+
+      regexResults &&
+        regexResults.forEach((r) => {
+          const id = r.split("channel/")[1];
+          members.push(db.doc(`channels/${id}`));
+        });
 
       await db
         .collection("videos")
@@ -75,6 +86,9 @@ exports.queryLiveStreamsByChannelId = functions.https.onRequest(
             liveViewerCount: liveStatus === "live" ? liveViewerCount : "",
             thumbnailUrl,
             liveStatus,
+            members: members.length
+              ? admin.firestore.FieldValue.arrayUnion(...members)
+              : admin.firestore.FieldValue.arrayUnion(...[channelId]),
           },
           { merge: true }
         );
@@ -120,10 +134,37 @@ exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
   const response = result.docs.reduce(
     (prev, cur) => {
       const videoId = cur.id;
-      return { data: { ...prev.data, [videoId]: cur.data() } };
+      const members = cur.data().members;
+      const memberIds =
+        members &&
+        members.map((m: DocumentReference) => {
+          return m.id;
+        });
+      return {
+        data: {
+          ...prev.data,
+          [videoId]: { ...cur.data(), members: memberIds },
+        },
+      };
     },
     { data: {} }
   );
 
+  res.set("Access-Control-Allow-Origin", "*");
+  res.send(response);
+});
+
+exports.fetchChannels = functions.https.onRequest(async (req, res) => {
+  const result = await db.collection("channels").get();
+
+  const response = result.docs.reduce(
+    (prev, cur) => {
+      const channelId = cur.id;
+      return { data: { ...prev.data, [channelId]: cur.data() } };
+    },
+    { data: {} }
+  );
+
+  res.set("Access-Control-Allow-Origin", "*");
   res.send(response);
 });
