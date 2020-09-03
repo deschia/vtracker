@@ -1,0 +1,37 @@
+@keyframes unhover {
+  from {height: 500px;}
+  to {height: 300px;}
+}
+
+@keyframes hover {
+  from {height: 300px;}
+  to {height: 500px;}
+}
+
+.card {
+
+  &::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  &.card-animation {
+    &:hover {
+      height: 500px;
+      animation-name: hover;
+      animation-duration: 0.5s;
+    }
+    &:not(:hover) {
+      animation-name: unhover;
+      animation-duration: 0.5s;
+    }
+  }
+}
+
+.card-container {
+  height: 300px;
+  overflow-y: hidden;
+
+   &:hover {
+     overflow-y: unset;
+   }
+}
