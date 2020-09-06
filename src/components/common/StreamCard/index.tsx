@@ -17,6 +17,7 @@ import endpoints from "~/constant/endpoints";
 import { default as moment } from "moment";
 import SkeletonWrapper from "~/components/common/SkeletonWrapper";
 import { AvatarGroup } from "@material-ui/lab";
+import numeral from "numeral";
 
 interface Props {
   changes?: string;
@@ -152,6 +153,19 @@ const StreamCard = (props: Props) => {
     if (skeleton) {
       return <SkeletonWrapper />;
     }
+    const { scheduledTime } = stream;
+    const formattedTime = moment.unix(scheduledTime._seconds).format("ddd LT");
+    return (
+      <Typography variant={"body2"} align={"right"}>
+        {formattedTime}
+      </Typography>
+    );
+  };
+
+  const renderLiveStatus = () => {
+    if (skeleton) {
+      return <SkeletonWrapper />;
+    }
     const { liveStatus, scheduledTime } = stream;
     const formattedTime = moment.unix(scheduledTime._seconds).fromNow();
     return (
@@ -162,13 +176,20 @@ const StreamCard = (props: Props) => {
   };
 
   const renderViewers = () => {
-    // TODO implement me
     if (skeleton) {
       return <SkeletonWrapper />;
     }
     const { liveViewerCount } = stream;
     if (!liveViewerCount) return;
-    return <Typography variant={"body2"}>{}</Typography>;
+    let formattedNumber: string;
+    if (Number(liveViewerCount) < 1000) {
+      formattedNumber = numeral(liveViewerCount).format("0a");
+    } else {
+      formattedNumber = numeral(liveViewerCount).format("0.0a");
+    }
+    return (
+      <Typography variant={"body2"}>{`${formattedNumber} viewers`}</Typography>
+    );
   };
 
   const renderTag = () => {
@@ -267,9 +288,11 @@ const StreamCard = (props: Props) => {
               {renderStreamTitle()}
             </Grid>
             <Grid item xs={6}>
+              {renderLiveStatus()}
+            </Grid>
+            <Grid item xs={6}>
               {renderStreamDate()}
             </Grid>
-            <Grid item xs={6} />
             <Grid item xs={6}>
               {renderViewers()}
             </Grid>
