@@ -4,6 +4,7 @@ import * as xml2js from "xml2js";
 import { default as axios } from "axios";
 import * as firebase from "firebase";
 import DocumentReference = firebase.firestore.DocumentReference;
+import moment = require("moment");
 
 const API_KEY = "AIzaSyCHgxdEJZeAiydl18PhyK2l2GX7FxGazd8";
 const YOUTUBE_API_BASE_URL = "https://www.googleapis.com/youtube/v3";
@@ -46,10 +47,24 @@ exports.queryLiveStreamsByChannelId = functions.https.onRequest(
       });
 
       const data = resp.data;
+
+      // handle unavailable video
+      if (!data.items.length) {
+        await db.collection("videos").doc(videoId).set(
+          {
+            available: false,
+          },
+          { merge: true }
+        );
+        functions.logger.log("stream unavailable:", videoId);
+        res.sendStatus(200);
+        return;
+      }
+
       const liveData = data.items[0].liveStreamingDetails;
       const snippet = data.items[0].snippet;
 
-      const scheduledTime = new Date(liveData.scheduledStartTime);
+      const scheduledTime = new Date(liveData.scheduledStartTime); // this line will throw exception if the video is not a stream
       const liveViewerCount: string | undefined = liveData.concurrentViewers;
       const title: string = snippet.title;
       const channelId: string = snippet.channelId;
@@ -83,7 +98,7 @@ exports.queryLiveStreamsByChannelId = functions.https.onRequest(
               scheduledTime.valueOf() / 1000,
               0
             ),
-            liveViewerCount: liveStatus === "live" ? liveViewerCount : "",
+            liveViewerCount: liveStatus === "live" ? liveViewerCount : 0,
             thumbnailUrl,
             liveStatus,
             members: members.length
@@ -115,23 +130,116 @@ exports.queryLiveStreamsByChannelId = functions.https.onRequest(
 );
 
 exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
-  const from = String(req.query["from"]);
-  const to = String(req.query["to"]);
+  let startTimeInUnix: number = Number(req.query["from"]);
+  let endTimeInUnix: number = Number(req.query["to"]);
 
-  // bad request
-  if (!from || !to) {
-    res.sendStatus(400);
-    return;
+  // default to -1 day until +1 day
+  if (!startTimeInUnix || !endTimeInUnix) {
+    endTimeInUnix = moment().add(1, "day").unix();
+    startTimeInUnix = moment().subtract(1, "day").unix();
   }
+
+  const formattedEndTime = new admin.firestore.Timestamp(endTimeInUnix, 0);
+  const formattedStartTime = new admin.firestore.Timestamp(startTimeInUnix, 0);
 
   const result = await db
     .collection("videos")
-    .where("scheduledTime", ">=", new Date(from))
-    .where("scheduledTime", "<=", new Date(to))
+    .where("scheduledTime", ">=", formattedStartTime)
+    .where("scheduledTime", "<=", formattedEndTime)
     .orderBy("scheduledTime", "desc")
     .get();
 
-  const response = result.docs.reduce(
+  const getDbLockResult = await db
+    .collection("_dbLock")
+    .doc("lastLiveDetailsQueryTime")
+    .get();
+
+  const lastQueryTimestamp = getDbLockResult.get("time");
+  const lastQuery = moment.unix(lastQueryTimestamp._seconds);
+  const oneMinuteAfterLastQuery = lastQuery.add(1, "minutes");
+  const now = moment();
+  const isWriteUnlocked = now.isAfter(oneMinuteAfterLastQuery);
+
+  if (isWriteUnlocked) {
+    const upcomingStreamVideoIds = result.docs.reduce((prev, cur) => {
+      const liveStatus = cur.data().liveStatus;
+      const videoId = cur.id;
+      if (liveStatus === "upcoming" || liveStatus === "live") {
+        return `${prev},${videoId}`;
+      }
+      return prev;
+    }, "");
+
+    const url = `${YOUTUBE_API_BASE_URL}/videos`;
+    const resp = await axios.get(url, {
+      params: {
+        key: API_KEY,
+        id: upcomingStreamVideoIds,
+        part: "snippet,liveStreamingDetails",
+      },
+    });
+
+    for (const item of resp.data.items) {
+      const liveData = item.liveStreamingDetails;
+      const snippet = item.snippet;
+      const videoId = item.id;
+
+      const scheduledTime = new Date(liveData.scheduledStartTime); // this line will throw exception if the video is not a stream
+      const title: string = snippet.title;
+      const liveViewerCount = liveData.concurrentViewers;
+      const liveStatus: "live" | "none" | "upcoming" =
+        snippet.liveBroadcastContent;
+      const newLiveViewerCount = liveViewerCount ? liveViewerCount : 0;
+
+      const currentStream = result.docs.find((doc) => doc.id === videoId);
+      const maxViewerCount =
+        currentStream && currentStream.data().maxViewerCount
+          ? currentStream.data().maxViewerCount
+          : 0;
+      const newMaxViewerCount =
+        Number(newLiveViewerCount) > maxViewerCount
+          ? newLiveViewerCount
+          : maxViewerCount;
+
+      await db
+        .collection("videos")
+        .doc(videoId)
+        .set(
+          {
+            title,
+            scheduledTime: new admin.firestore.Timestamp(
+              scheduledTime.valueOf() / 1000,
+              0
+            ),
+            liveViewerCount: Number(newLiveViewerCount),
+            liveStatus,
+            maxViewerCount: Number(newMaxViewerCount),
+          },
+          { merge: true }
+        );
+    }
+
+    await db
+      .collection("_dbLock")
+      .doc("lastLiveDetailsQueryTime")
+      .set(
+        {
+          time: new admin.firestore.Timestamp(now.unix(), 0),
+        },
+        { merge: true }
+      );
+  }
+
+  const finalResult = isWriteUnlocked
+    ? await db
+        .collection("videos")
+        .where("scheduledTime", ">=", formattedStartTime)
+        .where("scheduledTime", "<=", formattedEndTime)
+        .orderBy("scheduledTime", "desc")
+        .get()
+    : result;
+
+  const response = finalResult.docs.reduce(
     (prev, cur) => {
       const videoId = cur.id;
       const members = cur.data().members;
@@ -151,6 +259,7 @@ exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
   );
 
   res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Headers", "accept-language");
   res.send(response);
 });
 
@@ -166,5 +275,6 @@ exports.fetchChannels = functions.https.onRequest(async (req, res) => {
   );
 
   res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Headers", "accept-language");
   res.send(response);
 });
