@@ -5,13 +5,17 @@ import { default as axios } from "axios";
 import * as firebase from "firebase";
 import DocumentReference = firebase.firestore.DocumentReference;
 import moment = require("moment");
+import { StorageFileMetadata } from "./models";
 
 const API_KEY = "AIzaSyCHgxdEJZeAiydl18PhyK2l2GX7FxGazd8";
 const YOUTUBE_API_BASE_URL = "https://www.googleapis.com/youtube/v3";
 
-admin.initializeApp();
+admin.initializeApp({
+  storageBucket: "vtracker-4a593.appspot.com",
+});
 
 const db = admin.firestore();
+const bucket = admin.storage().bucket();
 
 exports.queryLiveStreamsByChannelId = functions.https.onRequest(
   async (req, res) => {
@@ -179,6 +183,8 @@ exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
       },
     });
 
+    let toBeWrittenToStorage: any = { data: {} };
+
     for (const item of resp.data.items) {
       const liveData = item.liveStreamingDetails;
       const snippet = item.snippet;
@@ -186,10 +192,25 @@ exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
 
       const scheduledTime = new Date(liveData.scheduledStartTime); // this line will throw exception if the video is not a stream
       const title: string = snippet.title;
+      const description: string = snippet.description;
+      const channelId: string = snippet.channelId;
+      const channelName: string = snippet.channelTitle;
+      const thumbnailUrl: string = snippet.thumbnails.standard.url;
       const liveViewerCount = liveData.concurrentViewers;
       const liveStatus: "live" | "none" | "upcoming" =
         snippet.liveBroadcastContent;
       const newLiveViewerCount = liveViewerCount ? liveViewerCount : 0;
+
+      // read description for member
+      const youtubeChannelIdRegex = /channel\/.{24}/g;
+      const regexResults = description.match(youtubeChannelIdRegex);
+      const members: string[] = [];
+
+      regexResults &&
+        regexResults.forEach((r) => {
+          const id = r.split("channel/")[1];
+          members.push(`channels/${id}`);
+        });
 
       const currentStream = result.docs.find((doc) => doc.id === videoId);
       const maxViewerCount =
@@ -217,7 +238,30 @@ exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
           },
           { merge: true }
         );
+
+      const newData = {
+        title,
+        channelId,
+        channelName,
+        scheduledTime: {
+          _seconds: scheduledTime.valueOf() / 1000,
+        },
+        liveViewerCount: Number(newLiveViewerCount),
+        liveStatus,
+        maxViewerCount: Number(newMaxViewerCount),
+        thumbnailUrl,
+        members: members.length ? members : [channelId],
+      };
+      toBeWrittenToStorage = {
+        data: {
+          ...toBeWrittenToStorage.data,
+          [videoId]: newData,
+        },
+      };
     }
+
+    const stringified = JSON.stringify(toBeWrittenToStorage);
+    await bucket.file("test.json").save(stringified, { resumable: false });
 
     await db
       .collection("_dbLock")
@@ -230,6 +274,13 @@ exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
       );
   }
 
+  // handle automated query (such as cron)
+  if (req.header("X-Automated-Query")) {
+    res.sendStatus(200);
+    return;
+  }
+
+  // TODO clean this up
   const finalResult = isWriteUnlocked
     ? await db
         .collection("videos")
@@ -261,6 +312,35 @@ exports.fetchSchedules = functions.https.onRequest(async (req, res) => {
   res.set("Access-Control-Allow-Origin", "*");
   res.set("Access-Control-Allow-Headers", "accept-language");
   res.send(response);
+});
+
+exports.fetchLiveStreams = functions.https.onRequest(async (req, res) => {
+  // set required headers
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Headers", ["accept-language", "x-md5-hash"]);
+
+  // get file hash
+  const getMetadataResponse = await bucket.file("test.json").getMetadata();
+  const metadata: StorageFileMetadata = getMetadataResponse[0];
+  const currentHash = metadata.md5Hash;
+
+  // send current hash through header
+  res.set("x-md5-hash", currentHash);
+  res.set("Access-Control-Expose-Headers", "x-md5-hash");
+
+  // compare hash of with already fetched file
+  // return if nothing changed
+  const previousHash = req.header("x-md5-hash");
+  if (currentHash === previousHash) {
+    res.sendStatus(200);
+    return;
+  }
+
+  // download file from storage and send its content in response body
+  const jsonFile = await bucket.file("test.json").download();
+  const rawJsonString = jsonFile[0].toString(); // It has this type [Buffer], so we take 0th index
+  res.set("Content-Type", "application/json");
+  res.send(rawJsonString);
 });
 
 exports.fetchChannels = functions.https.onRequest(async (req, res) => {
